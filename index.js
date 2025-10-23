@@ -140,6 +140,16 @@ app.post('/api/heartbeat', async (req, res) => {
 });
 
 
+app.get('/api/users', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, nickname, forum_id FROM users ORDER BY nickname ASC');
+        res.status(200).json(result.rows);
+    } catch (err) {
+        console.error('Get user list error:', err);
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
 // Запуск сервера
 app.listen(port, async () => {
     try {
@@ -173,4 +183,5 @@ app.listen(port, async () => {
         console.error('Database initialization error:', err);
     }
 });
+
 
