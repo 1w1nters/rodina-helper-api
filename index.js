@@ -193,13 +193,10 @@ app.post('/api/users/status', async (req, res) => {
 });
 
 // Запуск сервера
+// Запуск сервера
 app.listen(port, async () => {
     try {
-        // Сначала удаляем старую таблицу, если она есть, чтобы пересоздать ее с правильными типами
-        // ВНИМАНИЕ: Это удалит все существующие данные. Так как вы только начали, это безопасно.
-        // await pool.query('DROP TABLE IF EXISTS users;');
-
-        // Создаем таблицу с явно указанными типами JSONB
+        // Создаем таблицу, только если она не существует. Этого достаточно.
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -213,11 +210,6 @@ app.listen(port, async () => {
             );
         `);
 
-        // Добавляем ALTER TABLE команды, чтобы убедиться, что типы колонок правильные,
-        // даже если таблица уже существует. Это более безопасный способ.
-        await pool.query('ALTER TABLE users ALTER COLUMN progress TYPE JSONB USING progress::jsonb;');
-        await pool.query('ALTER TABLE users ALTER COLUMN settings TYPE JSONB USING settings::jsonb;');
-
         console.log('Database table "users" is ready.');
         console.log(`Server is running on port ${port}`);
 
@@ -225,6 +217,7 @@ app.listen(port, async () => {
         console.error('Database initialization error:', err);
     }
 });
+
 
 
 
