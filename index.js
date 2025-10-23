@@ -75,14 +75,18 @@ app.post('/api/user/data/:userId', async (req, res) => {
     const { progress, settings } = req.body;
 
     try {
+        // Используем оператор || для "умного" объединения JSONB данных.
+        // Это сохранит существующие поля и обновит/добавит только новые.
         if (progress) {
-            await pool.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
+            await pool.query('UPDATE users SET progress = progress || $1 WHERE id = $2', [progress, userId]);
         }
         if (settings) {
-            await pool.query('UPDATE users SET settings = $1, last_sync = NOW() WHERE id = $2', [settings, userId]);
+            await pool.query('UPDATE users SET settings = settings || $1, last_sync = NOW() WHERE id = $2', [settings, userId]);
         }
+        
         const result = await pool.query('SELECT last_sync FROM users WHERE id = $1', [userId]);
-        res.status(200).json({ message: 'Data saved successfully.', lastSyncTimestamp: result.rows[0].last_sync });
+        res.status(200).json({ message: 'Data saved successfully.', lastSyncTimestamp: result.rows[0]?.last_sync });
+
     } catch (err) {
         console.error('Save user data error:', err);
         res.status(500).json({ message: 'Server error.' });
@@ -217,6 +221,7 @@ app.listen(port, async () => {
         console.error('Database initialization error:', err);
     }
 });
+
 
 
 
