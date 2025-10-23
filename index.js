@@ -140,12 +140,54 @@ app.post('/api/heartbeat', async (req, res) => {
 });
 
 
+// 6. Получение списка всех пользователей
 app.get('/api/users', async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, nickname, forum_id FROM users ORDER BY nickname ASC');
+        const result = await pool.query('SELECT id, nickname FROM users ORDER BY nickname ASC');
         res.status(200).json(result.rows);
     } catch (err) {
         console.error('Get user list error:', err);
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// 7. Получение публичного профиля пользователя
+app.get('/api/users/profile/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        // Выбираем только публичные данные
+        const result = await pool.query(
+            "SELECT id, nickname, forum_id, progress->'complaintHistory' as complaintHistory, progress->'installDate' as installDate FROM users WHERE id = $1",
+            [userId]
+        );
+        if (result.rows.length > 0) {
+            res.status(200).json(result.rows[0]);
+        } else {
+            res.status(404).json({ message: 'User profile not found.' });
+        }
+    } catch (err) {
+        console.error('Get user profile error:', err);
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// 8. Получение статуса онлайн для списка пользователей
+app.post('/api/users/status', async (req, res) => {
+    const { forum_ids } = req.body;
+    if (!Array.isArray(forum_ids) || forum_ids.length === 0) {
+        return res.status(200).json([]);
+    }
+    try {
+        // Ищем пользователей, которые были онлайн в последние 3 минуты
+        const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000);
+        const result = await pool.query(
+            'SELECT forum_id FROM users WHERE forum_id = ANY($1) AND last_seen > $2',
+            [forum_ids, threeMinutesAgo]
+        );
+        const onlineIds = result.rows.map(row => row.forum_id);
+        res.status(200).json(onlineIds);
+    } catch (err) {
+        console.error('Get online status error:', err);
         res.status(500).json({ message: 'Server error.' });
     }
 });
@@ -183,5 +225,6 @@ app.listen(port, async () => {
         console.error('Database initialization error:', err);
     }
 });
+
 
 
