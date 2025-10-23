@@ -1,0 +1,153 @@
+const express = require('express');
+const cors = require('cors');
+const { Pool } = require('pg');
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Подключение к базе данных PostgreSQL на Render
+// URL будет добавлен позже через переменные окружения
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
+    }
+});
+
+// Middleware для обработки JSON и разрешения CORS-запросов
+app.use(cors());
+app.use(express.json());
+
+// --- API ЭНДПОИНТЫ ---
+
+// 1. Регистрация или получение пользователя
+app.post('/api/user/auth', async (req, res) => {
+    const { forumId, nickname } = req.body;
+    if (!forumId || !nickname) {
+        return res.status(400).json({ message: 'Forum ID and nickname are required.' });
+    }
+
+    try {
+        // Пытаемся найти пользователя
+        let userResult = await pool.query('SELECT * FROM users WHERE forum_id = $1', [forumId]);
+        let user = userResult.rows[0];
+
+        if (user) {
+            // Если пользователь найден, обновляем его ник на всякий случай и дату последнего визита
+            await pool.query('UPDATE users SET nickname = $1, last_seen = NOW() WHERE forum_id = $2', [nickname, forumId]);
+            console.log(`User ${nickname} found and updated.`);
+        } else {
+            // Если не найден, создаем нового
+            const insertResult = await pool.query(
+                'INSERT INTO users (forum_id, nickname, created_at, last_seen, progress) VALUES ($1, $2, NOW(), NOW(), $3) RETURNING *',
+                [forumId, nickname, JSON.stringify({ installDate: Date.now(), achievements: {}, complaintHistory: [] })]
+            );
+            user = insertResult.rows[0];
+            console.log(`User ${nickname} created.`);
+        }
+        res.status(200).json(user);
+
+    } catch (err) {
+        console.error('Auth error:', err);
+        res.status(500).json({ message: 'Server error during authentication.' });
+    }
+});
+
+// 2. Получение данных пользователя (прогресс и настройки)
+app.get('/api/user/data/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const result = await pool.query('SELECT progress, settings, last_sync FROM users WHERE id = $1', [userId]);
+        if (result.rows.length > 0) {
+            res.status(200).json(result.rows[0]);
+        } else {
+            res.status(404).json({ message: 'User data not found.' });
+        }
+    } catch (err) {
+        console.error('Get user data error:', err);
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// 3. Сохранение данных пользователя
+app.post('/api/user/data/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const { progress, settings } = req.body;
+
+    try {
+        if (progress) {
+            await pool.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
+        }
+        if (settings) {
+            await pool.query('UPDATE users SET settings = $1, last_sync = NOW() WHERE id = $2', [settings, userId]);
+        }
+        const result = await pool.query('SELECT last_sync FROM users WHERE id = $1', [userId]);
+        res.status(200).json({ message: 'Data saved successfully.', lastSyncTimestamp: result.rows[0].last_sync });
+    } catch (err) {
+        console.error('Save user data error:', err);
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// 4. Получение лидербордов
+app.get('/api/stats/leaderboard', async (req, res) => {
+    try {
+        // Запрос для получения всех пользователей, у кого есть история жалоб
+        const result = await pool.query("SELECT nickname, progress FROM users WHERE jsonb_array_length(progress->'complaintHistory') > 0");
+        
+        const users = result.rows.map(row => {
+            const history = row.progress.complaintHistory || [];
+            const now = Date.now();
+            const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
+            const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
+
+            return {
+                nickname: row.nickname,
+                weeklyCount: history.filter(item => item.timestamp >= oneWeekAgo).length,
+                monthlyCount: history.filter(item => item.timestamp >= oneMonthAgo).length
+            };
+        });
+
+        const weekly = [...users].sort((a, b) => b.weeklyCount - a.weeklyCount).slice(0, 10);
+        const monthly = [...users].sort((a, b) => b.monthlyCount - a.monthlyCount).slice(0, 10);
+
+        res.status(200).json({ weekly, monthly });
+    } catch (err) {
+        console.error('Leaderboard error:', err);
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// 5. Heartbeat - обновление статуса "онлайн"
+app.post('/api/heartbeat', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) {
+        return res.status(400).send();
+    }
+    try {
+        await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [userId]);
+        res.status(200).send();
+    } catch (err) {
+        console.error('Heartbeat error:', err);
+        res.status(500).send();
+    }
+});
+
+
+// Запуск сервера
+app.listen(port, async () => {
+    // При запуске сервера проверяем, существует ли таблица users, и создаем ее, если нет
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            forum_id VARCHAR(20) UNIQUE NOT NULL,
+            nickname VARCHAR(50) NOT NULL,
+            created_at TIMESTAMPTZ,
+            last_seen TIMESTAMPTZ,
+            last_sync TIMESTAMPTZ,
+            progress JSONB,
+            settings JSONB
+        );
+    `);
+    console.log(`Server is running on port ${port}`);
+});
