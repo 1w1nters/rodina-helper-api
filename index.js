@@ -136,18 +136,34 @@ app.post('/api/heartbeat', async (req, res) => {
 
 // Запуск сервера
 app.listen(port, async () => {
-    // При запуске сервера проверяем, существует ли таблица users, и создаем ее, если нет
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            forum_id VARCHAR(20) UNIQUE NOT NULL,
-            nickname VARCHAR(50) NOT NULL,
-            created_at TIMESTAMPTZ,
-            last_seen TIMESTAMPTZ,
-            last_sync TIMESTAMPTZ,
-            progress JSONB,
-            settings JSONB
-        );
-    `);
-    console.log(`Server is running on port ${port}`);
+    try {
+        // Сначала удаляем старую таблицу, если она есть, чтобы пересоздать ее с правильными типами
+        // ВНИМАНИЕ: Это удалит все существующие данные. Так как вы только начали, это безопасно.
+        // await pool.query('DROP TABLE IF EXISTS users;');
+
+        // Создаем таблицу с явно указанными типами JSONB
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                forum_id VARCHAR(20) UNIQUE NOT NULL,
+                nickname VARCHAR(50) NOT NULL,
+                created_at TIMESTAMPTZ,
+                last_seen TIMESTAMPTZ,
+                last_sync TIMESTAMPTZ,
+                progress JSONB,
+                settings JSONB
+            );
+        `);
+
+        // Добавляем ALTER TABLE команды, чтобы убедиться, что типы колонок правильные,
+        // даже если таблица уже существует. Это более безопасный способ.
+        await pool.query('ALTER TABLE users ALTER COLUMN progress TYPE JSONB USING progress::jsonb;');
+        await pool.query('ALTER TABLE users ALTER COLUMN settings TYPE JSONB USING settings::jsonb;');
+
+        console.log('Database table "users" is ready.');
+        console.log(`Server is running on port ${port}`);
+
+    } catch (err) {
+        console.error('Database initialization error:', err);
+    }
 });
