@@ -92,19 +92,25 @@ app.post('/api/user/data/:userId', async (req, res) => {
 // 4. Получение лидербордов
 app.get('/api/stats/leaderboard', async (req, res) => {
     try {
-        // Запрос для получения всех пользователей, у кого есть история жалоб
         const result = await pool.query("SELECT nickname, progress FROM users WHERE jsonb_array_length(progress->'complaintHistory') > 0");
         
         const users = result.rows.map(row => {
-            const history = row.progress.complaintHistory || [];
+            // --- НАЧАЛО ИЗМЕНЕНИЙ ---
+            // Проверяем, что history существует и является массивом
+            const history = Array.isArray(row.progress.complaintHistory) ? row.progress.complaintHistory : [];
+            // --- КОНЕЦ ИЗМЕНЕНИЙ ---
+            
             const now = Date.now();
             const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
             const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
 
             return {
                 nickname: row.nickname,
-                weeklyCount: history.filter(item => item.timestamp >= oneWeekAgo).length,
-                monthlyCount: history.filter(item => item.timestamp >= oneMonthAgo).length
+                // --- НАЧАЛО ИЗМЕНЕНИЙ ---
+                // Добавляем проверку, что у элемента есть timestamp
+                weeklyCount: history.filter(item => item && item.timestamp && item.timestamp >= oneWeekAgo).length,
+                monthlyCount: history.filter(item => item && item.timestamp && item.timestamp >= oneMonthAgo).length
+                // --- КОНЕЦ ИЗМЕНЕНИЙ ---
             };
         });
 
@@ -167,3 +173,4 @@ app.listen(port, async () => {
         console.error('Database initialization error:', err);
     }
 });
+
