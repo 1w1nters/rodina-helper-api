@@ -85,6 +85,7 @@ app.post('/api/user/data/:userId', async (req, res) => {
         }
         
         const result = await pool.query('SELECT last_sync FROM users WHERE id = $1', [userId]);
+        // Добавлена проверка на случай, если result.rows[0] не существует
         res.status(200).json({ message: 'Data saved successfully.', lastSyncTimestamp: result.rows[0]?.last_sync });
 
     } catch (err) {
@@ -221,6 +222,7 @@ app.listen(port, async () => {
         console.error('Database initialization error:', err);
     }
 });
+
 
 
 
