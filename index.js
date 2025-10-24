@@ -22,30 +22,35 @@ app.use(express.json());
 
 // 1. Регистрация или получение пользователя
 app.post('/api/user/auth', async (req, res) => {
-    const { forumId, nickname } = req.body;
+    // ИЗМЕНЕНИЕ: Добавляем adminLevel из запроса
+    const { forumId, nickname, adminLevel } = req.body;
     if (!forumId || !nickname) {
         return res.status(400).json({ message: 'Forum ID and nickname are required.' });
     }
 
     try {
-        // Пытаемся найти пользователя
         let userResult = await pool.query('SELECT * FROM users WHERE forum_id = $1', [forumId]);
         let user = userResult.rows[0];
 
         if (user) {
-            // Если пользователь найден, обновляем его ник на всякий случай и дату последнего визита
-            await pool.query('UPDATE users SET nickname = $1, last_seen = NOW() WHERE forum_id = $2', [nickname, forumId]);
-            console.log(`User ${nickname} found and updated.`);
+            // ИЗМЕНЕНИЕ: Обновляем не только ник, но и уровень администратора
+            await pool.query(
+                'UPDATE users SET nickname = $1, last_seen = NOW(), admin_level = $2 WHERE forum_id = $3', 
+                [nickname, adminLevel || 0, forumId]
+            );
+            console.log(`User ${nickname} found and updated with admin level ${adminLevel}.`);
         } else {
-            // Если не найден, создаем нового
+            // ИЗМЕНЕНИЕ: Добавляем уровень администратора при создании нового пользователя
             const insertResult = await pool.query(
-                'INSERT INTO users (forum_id, nickname, created_at, last_seen, progress) VALUES ($1, $2, NOW(), NOW(), $3) RETURNING *',
-                [forumId, nickname, JSON.stringify({ installDate: Date.now(), achievements: {}, complaintHistory: [] })]
+                'INSERT INTO users (forum_id, nickname, admin_level, created_at, last_seen, progress) VALUES ($1, $2, $3, NOW(), NOW(), $4) RETURNING *',
+                [forumId, nickname, adminLevel || 0, JSON.stringify({ installDate: Date.now(), achievements: {}, complaintHistory: [] })]
             );
             user = insertResult.rows[0];
-            console.log(`User ${nickname} created.`);
+            console.log(`User ${nickname} created with admin level ${adminLevel}.`);
         }
-        res.status(200).json(user);
+        // Получаем свежие данные пользователя после обновления/создания
+        const finalUserResult = await pool.query('SELECT * FROM users WHERE forum_id = $1', [forumId]);
+        res.status(200).json(finalUserResult.rows[0]);
 
     } catch (err) {
         console.error('Auth error:', err);
@@ -131,12 +136,27 @@ app.get('/api/stats/leaderboard', async (req, res) => {
 
 // 5. Heartbeat - обновление статуса "онлайн"
 app.post('/api/heartbeat', async (req, res) => {
-    const { userId } = req.body;
+    // ИЗМЕНЕНИЕ: Принимаем userId и adminLevel
+    const { userId, adminLevel } = req.body;
     if (!userId) {
         return res.status(400).send();
     }
     try {
-        await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [userId]);
+        // ИЗМЕНЕНИЕ: Собираем запрос динамически
+        let query = 'UPDATE users SET last_seen = NOW()';
+        const queryParams = [userId];
+
+        // Если в heartbeat пришел adminLevel, обновляем и его тоже
+        if (adminLevel !== undefined && adminLevel !== null) {
+            queryParams.unshift(adminLevel); // Добавляем в начало массива параметров
+            query += ', admin_level = $1 WHERE id = $2';
+        } else {
+            query += ' WHERE id = $1';
+        }
+        
+        // Выполняем запрос с правильным количеством параметров
+        await pool.query(query, queryParams.reverse());
+
         res.status(200).send();
     } catch (err) {
         console.error('Heartbeat error:', err);
@@ -201,7 +221,6 @@ app.post('/api/users/status', async (req, res) => {
 // Запуск сервера
 app.listen(port, async () => {
     try {
-        // Создаем таблицу, только если она не существует. Этого достаточно.
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -211,17 +230,27 @@ app.listen(port, async () => {
                 last_seen TIMESTAMPTZ,
                 last_sync TIMESTAMPTZ,
                 progress JSONB,
-                settings JSONB
+                settings JSONB,
+                admin_level INTEGER DEFAULT 0 -- ИЗМЕНЕНИЕ: Добавлена новая колонка
             );
         `);
+        console.log('Database table "users" schema check complete.');
 
-        console.log('Database table "users" is ready.');
+        // ИЗМЕНЕНИЕ: Добавляем колонку, если она еще не существует (для уже созданных таблиц)
+        try {
+            await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_level INTEGER DEFAULT 0;');
+            console.log('Column "admin_level" is present in the "users" table.');
+        } catch (alterErr) {
+            console.error('Could not ensure admin_level column exists:', alterErr);
+        }
+
         console.log(`Server is running on port ${port}`);
 
     } catch (err) {
         console.error('Database initialization error:', err);
     }
 });
+
 
 
 
