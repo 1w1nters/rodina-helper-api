@@ -224,7 +224,16 @@ app.get('/api/users/profile/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
         const result = await pool.query(
-            "SELECT id, nickname, forum_id, created_at, admin_level, progress->'complaintHistory' as complaintHistory, progress->'achievements' as achievements, progress->'activityLog' as activityLog FROM users WHERE id = $1",
+            `SELECT 
+                id, 
+                nickname, 
+                forum_id, 
+                created_at, 
+                admin_level, 
+                COALESCE(progress->'complaintHistory', '[]'::jsonb) as "complaintHistory", 
+                COALESCE(progress->'achievements', '{}'::jsonb) as "achievements", 
+                COALESCE(progress->'activityLog', '[]'::jsonb) as "activityLog" 
+            FROM users WHERE id = $1`,
             [userId]
         );
         if (result.rows.length > 0) {
