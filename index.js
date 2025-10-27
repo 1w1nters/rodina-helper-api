@@ -180,8 +180,9 @@ app.get('/api/users', async (req, res) => {
 app.get('/api/users/profile/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
+        // --- ИЗМЕНЕНИЕ: Добавляем поле progress->'achievements' в запрос ---
         const result = await pool.query(
-            "SELECT id, nickname, forum_id, progress->'complaintHistory' as complaintHistory, progress->'installDate' as installDate FROM users WHERE id = $1",
+            "SELECT id, nickname, forum_id, progress->'complaintHistory' as complaintHistory, progress->'installDate' as installDate, progress->'achievements' as achievements FROM users WHERE id = $1",
             [userId]
         );
         if (result.rows.length > 0) {
