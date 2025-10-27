@@ -279,7 +279,7 @@ app.post('/api/actions/report-action', async (req, res) => {
         const userRes = await pool.query('SELECT progress FROM users WHERE id = $1', [userId]);
         if (userRes.rows.length === 0) throw new Error('Пользователь не найден.');
 
-        const progress = userRes.rows[0].progress || { achievements: {} };
+        let progress = userRes.rows[0].progress || { achievements: {} };
         if (!progress.achievements) progress.achievements = {};
 
         let achievementGranted = false;
@@ -301,7 +301,9 @@ app.post('/api/actions/report-action', async (req, res) => {
             console.log(`[SERVER] Пользователю ${userId} выдано достижение за действие "${actionType}".`);
         }
         
-        res.status(200).json({ success: true, newAchievement: achievementGranted });
+        // --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        // Возвращаем полный объект progress, чтобы клиент мог немедленно обновиться
+        res.status(200).json({ success: true, newAchievement: achievementGranted, progress: progress });
 
     } catch (error) {
         console.error(`Ошибка при обработке действия "${actionType}":`, error);
