@@ -49,8 +49,13 @@ app.post('/api/user/auth', async (req, res) => {
             console.log(`User ${nickname} (Rodina) created with admin level ${adminLevel}.`);
         }
         
-        // Возвращаем актуальные данные пользователя
-        const finalUserResult = await pool.query('SELECT * FROM users WHERE forum_id = $1', [forumId]);
+        // Возвращаем актуальные данные пользователя, включая среднее время
+        const finalUserResult = await pool.query(
+            `SELECT *, 
+            (progress->'stats'->>'totalCheckTime')::numeric / NULLIF((progress->'stats'->>'totalChecks')::numeric, 0) as "averageCheckTime"
+            FROM users WHERE forum_id = $1`, 
+            [forumId]
+        );
         res.status(200).json(finalUserResult.rows[0]);
 
     } catch (err) {
@@ -232,7 +237,8 @@ app.get('/api/users/profile/:userId', async (req, res) => {
                 admin_level, 
                 COALESCE(progress->'complaintHistory', '[]'::jsonb) as "complaintHistory", 
                 COALESCE(progress->'achievements', '{}'::jsonb) as "achievements", 
-                COALESCE(progress->'activityLog', '[]'::jsonb) as "activityLog" 
+                COALESCE(progress->'activityLog', '[]'::jsonb) as "activityLog",
+                (progress->'stats'->>'totalCheckTime')::numeric / NULLIF((progress->'stats'->>'totalChecks')::numeric, 0) as "averageCheckTime"
             FROM users WHERE id = $1`,
             [userId]
         );
@@ -264,6 +270,44 @@ app.post('/api/users/status', async (req, res) => {
     } catch (err) {
         console.error('Get online status error:', err);
         res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+app.post('/api/stats/check-time', async (req, res) => {
+    const { userId, duration } = req.body; // duration в секундах
+    if (!userId || typeof duration !== 'number') {
+        return res.status(400).json({ message: 'userId и duration обязательны.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const userRes = await client.query('SELECT progress FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        if (userRes.rows.length === 0) {
+            throw new Error('Пользователь не найден.');
+        }
+
+        let progress = userRes.rows[0].progress || {};
+        if (!progress.stats) {
+            progress.stats = { totalCheckTime: 0, totalChecks: 0 };
+        }
+
+        progress.stats.totalCheckTime = (progress.stats.totalCheckTime || 0) + duration;
+        progress.stats.totalChecks = (progress.stats.totalChecks || 0) + 1;
+
+        await client.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
+        await client.query('COMMIT');
+        
+        console.log(`[SERVER] Записано время проверки ${duration} сек. для пользователя ${userId}.`);
+        res.status(200).json({ success: true, message: 'Время проверки записано.' });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error(`[SERVER] Ошибка при записи времени проверки для пользователя ${userId}:`, error);
+        res.status(500).json({ message: 'Внутренняя ошибка сервера.' });
+    } finally {
+        client.release();
     }
 });
 
