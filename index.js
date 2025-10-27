@@ -273,6 +273,8 @@ app.post('/api/users/status', async (req, res) => {
     }
 });
 
+// index.js
+
 app.post('/api/stats/check-time', async (req, res) => {
     const { userId, duration } = req.body; // duration в секундах
     if (!userId || typeof duration !== 'number') {
@@ -299,8 +301,11 @@ app.post('/api/stats/check-time', async (req, res) => {
         await client.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
         await client.query('COMMIT');
         
-        console.log(`[SERVER] Записано время проверки ${duration} сек. для пользователя ${userId}.`);
-        res.status(200).json({ success: true, message: 'Время проверки записано.' });
+        // --- НАЧАЛО ИЗМЕНЕНИЯ ---
+        const newAverageTime = progress.stats.totalCheckTime / progress.stats.totalChecks;
+        console.log(`[SERVER] Записано время проверки ${duration} сек. для пользователя ${userId}. Новое среднее: ${newAverageTime}`);
+        res.status(200).json({ success: true, message: 'Время проверки записано.', newAverageTime: newAverageTime });
+        // --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
     } catch (error) {
         await client.query('ROLLBACK');
