@@ -152,9 +152,9 @@ app.get('/api/users/profile/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
         // --- НАЧАЛО ИЗМЕНЕНИЯ ---
-        // Добавляем поле created_at в SELECT-запрос
+        // Добавляем в запрос поля admin_level и activityLog
         const result = await pool.query(
-            "SELECT id, nickname, forum_id, created_at, progress->'complaintHistory' as complaintHistory, progress->'achievements' as achievements FROM users WHERE id = $1",
+            "SELECT id, nickname, forum_id, created_at, admin_level, progress->'complaintHistory' as complaintHistory, progress->'achievements' as achievements, progress->'activityLog' as activityLog FROM users WHERE id = $1",
             [userId]
         );
         // --- КОНЕЦ ИЗМЕНЕНИЯ ---
