@@ -75,16 +75,14 @@ app.get('/api/user/data/:userId', async (req, res) => {
     }
 });
 
-// 3. Сохранение данных пользователя (прогресс)
+// 3. Сохранение данных пользователя (прогресс) - ОСТАВЛЯЕМ ДЛЯ ОБЩЕЙ СИНХРОНИЗАЦИИ
 app.post('/api/user/data/:userId', async (req, res) => {
     const { userId } = req.params;
-    const { progress } = req.body; // Rodina Helper отправляет только 'progress'
+    const { progress } = req.body;
     if (!progress) {
         return res.status(400).json({ message: 'Progress data is required.' });
     }
-
     try {
-        // Просто обновляем поле progress
         await pool.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
         res.status(200).json({ message: 'Data saved successfully.' });
     } catch (err) {
@@ -92,6 +90,80 @@ app.post('/api/user/data/:userId', async (req, res) => {
         res.status(500).json({ message: 'Server error.' });
     }
 });
+
+
+// --- НАЧАЛО ГЛАВНОГО ИЗМЕНЕНИЯ ---
+
+// НОВЫЙ ЭНДПОИНТ ДЛЯ ДОБАВЛЕНИЯ ОДНОЙ ЖАЛОБЫ
+app.post('/api/complaints/add', async (req, res) => {
+    const { userId, threadId } = req.body;
+    if (!userId || !threadId) {
+        return res.status(400).json({ message: 'userId и threadId обязательны.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 1. Получаем текущий прогресс пользователя
+        const userRes = await client.query('SELECT progress FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        if (userRes.rows.length === 0) {
+            throw new Error('Пользователь не найден.');
+        }
+
+        let progress = userRes.rows[0].progress || {};
+        // Инициализируем поля, если их нет
+        progress.complaintHistory = progress.complaintHistory || [];
+        progress.activityLog = progress.activityLog || [];
+        progress.achievements = progress.achievements || {};
+
+        // 2. Добавляем новую жалобу в историю
+        progress.complaintHistory.push({
+            threadId: threadId,
+            timestamp: Date.now(),
+        });
+
+        // 3. Добавляем запись в лог активности
+        const newLogEntry = {
+            type: 'complaint',
+            details: { threadId: threadId },
+            timestamp: Date.now()
+        };
+        progress.activityLog.unshift(newLogEntry);
+        if (progress.activityLog.length > 50) {
+            progress.activityLog.length = 50;
+        }
+
+        // 4. Проверяем достижения за жалобы прямо здесь, на сервере
+        const complaintCount = progress.complaintHistory.length;
+        const complaintAchievements = { 'complaints_10': 10, 'complaints_50': 50, 'complaints_100': 100 };
+
+        for (const [achId, requiredCount] of Object.entries(complaintAchievements)) {
+            if (complaintCount >= requiredCount && !progress.achievements[achId]) {
+                progress.achievements[achId] = { grantedAt: Date.now() };
+            }
+        }
+
+        // 5. Сохраняем обновленный объект progress в базу данных
+        await client.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
+        await client.query('COMMIT');
+
+        console.log(`[SERVER] Успешно обработана жалоба #${threadId} для пользователя ${userId}.`);
+        
+        // 6. Возвращаем клиенту самый актуальный и полный объект progress
+        res.status(200).json({ success: true, progress: progress });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error(`[SERVER] Ошибка при обработке жалобы #${threadId}:`, error);
+        res.status(500).json({ message: 'Внутренняя ошибка сервера.' });
+    } finally {
+        client.release();
+    }
+});
+
+// --- КОНЕЦ ГЛАВНОГО ИЗМЕНЕНИЯ ---
+
 
 // 4. Получение лидербордов
 app.get('/api/stats/leaderboard', async (req, res) => {
@@ -151,13 +223,10 @@ app.get('/api/users', async (req, res) => {
 app.get('/api/users/profile/:userId', async (req, res) => {
     const { userId } = req.params;
     try {
-        // --- НАЧАЛО ИЗМЕНЕНИЯ ---
-        // Добавляем в запрос поля admin_level и activityLog
         const result = await pool.query(
             "SELECT id, nickname, forum_id, created_at, admin_level, progress->'complaintHistory' as complaintHistory, progress->'achievements' as achievements, progress->'activityLog' as activityLog FROM users WHERE id = $1",
             [userId]
         );
-        // --- КОНЕЦ ИЗМЕНЕНИЯ ---
         if (result.rows.length > 0) {
             res.status(200).json(result.rows[0]);
         } else {
@@ -189,7 +258,6 @@ app.post('/api/users/status', async (req, res) => {
     }
 });
 
-// --- ЭНДПОИНТЫ, АДАПТИРОВАННЫЕ ДЛЯ RODINA HELPER ---
 
 // 9. Регистрация действия и выдача ачивки
 app.post('/api/actions/report-action', async (req, res) => {
@@ -207,7 +275,6 @@ app.post('/api/actions/report-action', async (req, res) => {
 
         let achievementGranted = false;
         
-        // Ачивки, которые ожидает Rodina Helper
         const achievementsMap = {
             'sent_feedback': 'pioneer',
             'used_removal_tool': 'archivist'
@@ -233,7 +300,7 @@ app.post('/api/actions/report-action', async (req, res) => {
     }
 });
 
-// 10. Проверка ежедневных достижений и достижений за жалобы
+// 10. Проверка ежедневных достижений
 app.post('/api/actions/check-daily', async (req, res) => {
     const { userId } = req.body;
     if (!userId) {
@@ -258,17 +325,6 @@ app.post('/api/actions/check-daily', async (req, res) => {
 
         for (const [achId, requiredDays] of Object.entries(dayAchievements)) {
             if (daysUsed >= requiredDays && !progress.achievements[achId]) {
-                progress.achievements[achId] = { grantedAt: Date.now() };
-                changed = true;
-            }
-        }
-
-        // Проверка достижений за жалобы
-        const complaintCount = progress.complaintHistory?.length || 0;
-        const complaintAchievements = { 'complaints_10': 10, 'complaints_50': 50, 'complaints_100': 100 };
-
-        for (const [achId, requiredCount] of Object.entries(complaintAchievements)) {
-            if (complaintCount >= requiredCount && !progress.achievements[achId]) {
                 progress.achievements[achId] = { grantedAt: Date.now() };
                 changed = true;
             }
