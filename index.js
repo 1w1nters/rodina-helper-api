@@ -261,6 +261,7 @@ app.post('/api/actions/report-action', async (req, res) => {
 });
 
 // --- НОВЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ ЕЖЕДНЕВНЫХ ДОСТИЖЕНИЙ ---
+// --- НОВЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ ЕЖЕДНЕВНЫХ ДОСТИЖЕНИЙ ---
 app.post('/api/actions/check-daily', async (req, res) => {
     const { userId } = req.body;
     if (!userId) {
@@ -273,13 +274,17 @@ app.post('/api/actions/check-daily', async (req, res) => {
         if (userRes.rows.length === 0) throw new Error('Пользователь не найден.');
 
         const { created_at, progress: currentProgress } = userRes.rows[0];
-        const progress = currentProgress || { achievements: {} };
+        const progress = currentProgress || { achievements: {}, complaintHistory: [] };
         if (!progress.achievements) progress.achievements = {};
+        if (!progress.complaintHistory) progress.complaintHistory = [];
 
-        const installDate = new Date(created_at).getTime();
-        const daysUsed = Math.floor((Date.now() - installDate) / DAY_IN_MS);
         let changed = false;
 
+        // --- НАЧАЛО ИЗМЕНЕНИЙ: Добавляем проверку жалоб сюда ---
+
+        // 1. Проверка достижений за дни
+        const installDate = new Date(created_at).getTime();
+        const daysUsed = Math.floor((Date.now() - installDate) / DAY_IN_MS);
         const dayAchievements = { 'days_1': 1, 'days_7': 7, 'days_30': 30 };
 
         for (const [achId, requiredDays] of Object.entries(dayAchievements)) {
@@ -289,6 +294,20 @@ app.post('/api/actions/check-daily', async (req, res) => {
                 console.log(`[SERVER] Пользователю ${userId} выдано достижение за дни: "${achId}".`);
             }
         }
+
+        // 2. Проверка достижений за жалобы
+        const complaintCount = progress.complaintHistory.length;
+        const complaintAchievements = { 'complaints_10': 10, 'complaints_50': 50, 'complaints_100': 100 };
+
+        for (const [achId, requiredCount] of Object.entries(complaintAchievements)) {
+            if (complaintCount >= requiredCount && !progress.achievements[achId]) {
+                progress.achievements[achId] = { grantedAt: Date.now() };
+                changed = true;
+                console.log(`[SERVER] Пользователю ${userId} выдано достижение за жалобы: "${achId}".`);
+            }
+        }
+        
+        // --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         if (changed) {
             await pool.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
