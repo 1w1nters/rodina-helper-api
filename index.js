@@ -20,94 +20,90 @@ app.use(express.json());
 
 // --- API ЭНДПОИНТЫ ---
 
-const ACHIEVEMENTS = {
-    // Достижения за дни использования
-    'days_1': { id: 'days_1', name: 'Новичок', description: '1 день с Rodina Helper. Добро пожаловать!', icon: 'user-plus' },
-    'days_7': { id: 'days_7', name: 'Освоившийся', description: '7 дней с Rodina Helper. Вы уже освоились!', icon: 'rocket' },
-    'days_30': { id: 'days_30', name: 'Ветеран', description: '30 дней с Rodina Helper. Вы - часть команды!', icon: 'crown' },
-
-    // Достижения за количество проверенных жалоб
-    'complaints_10': { id: 'complaints_10', name: 'Первые шаги', description: 'Рассмотрено 10 жалоб. Отличное начало!', icon: 'baby' },
-    'complaints_50': { id: 'complaints_50', name: 'Работник месяца', description: 'Рассмотрено 50 жалоб. Так держать!', icon: 'hand-peace' },
-    'complaints_100': { id: 'complaints_100', name: 'Страж порядка', description: 'Рассмотрено 100 жалоб. Справедливость восторжествует!', icon: 'user-shield' },
-    
-    // Достижения за использование функций
-    'pioneer': { id: 'pioneer', name: 'Неравнодушный', description: 'Отправили свой первый отчет об ошибке или предложение. Спасибо за помощь!', icon: 'handshake-angle' },
-    'archivist': { id: 'archivist', name: 'Архивариус', description: 'Воспользовались функцией снятия администратора. Важная и ответственная процедура.', icon: 'edit' }
-};
-
 app.post('/api/actions/report-action', async (req, res) => {
-    const { userId, actionType, value } = req.body;
-
+    const { userId, actionType } = req.body;
     if (!userId || !actionType) {
-        return res.status(400).json({ message: 'User ID and action type are required.' });
+        return res.status(400).json({ message: 'Необходимы userId и actionType.' });
     }
 
     try {
-        const userResult = await pool.query("SELECT progress FROM users WHERE id = $1", [userId]);
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ message: 'User not found.' });
-        }
+        const userRes = await pool.query('SELECT progress FROM users WHERE id = $1', [userId]);
+        if (userRes.rows.length === 0) throw new Error('Пользователь не найден.');
 
-        const userProgress = userResult.rows[0].progress || { achievements: {}, complaintHistory: [] };
-        const achievements = userProgress.achievements || {};
-        const awardedAchievements = [];
+        const progress = userRes.rows[0].progress || { achievements: {} };
+        if (!progress.achievements) progress.achievements = {};
 
-        // Логика проверки достижений
+        let achievementGranted = false;
+
+        // Определяем, какое достижение выдать
         switch (actionType) {
             case 'sent_feedback':
-                if (!achievements.pioneer) {
-                    achievements.pioneer = { grantedAt: Date.now() };
-                    awardedAchievements.push(ACHIEVEMENTS.pioneer);
+                if (!progress.achievements['pioneer']) {
+                    progress.achievements['pioneer'] = { grantedAt: Date.now() };
+                    achievementGranted = true;
                 }
                 break;
-            
             case 'used_removal_tool':
-                if (!achievements.archivist) {
-                    achievements.archivist = { grantedAt: Date.now() };
-                    awardedAchievements.push(ACHIEVEMENTS.archivist);
-                }
-                break;
-
-            case 'processed_complaint':
-                const complaintCount = value || 0;
-                const complaintAchievements = Object.values(ACHIEVEMENTS).filter(a => a.id.startsWith('complaints_'));
-                for (const ach of complaintAchievements) {
-                    if (complaintCount >= ach.req && !achievements[ach.id]) {
-                        achievements[ach.id] = { grantedAt: Date.now() };
-                        awardedAchievements.push(ach);
-                    }
-                }
-                break;
-            
-            case 'daily_check':
-                const installDate = userProgress.installDate || Date.now();
-                const daysUsed = Math.floor((Date.now() - installDate) / (1000 * 60 * 60 * 24));
-                const dailyAchievements = Object.values(ACHIEVEMENTS).filter(a => a.id.startsWith('days_'));
-                for (const ach of dailyAchievements) {
-                     if (daysUsed >= ach.req && !achievements[ach.id]) {
-                        achievements[ach.id] = { grantedAt: Date.now() };
-                        awardedAchievements.push(ach);
-                    }
+                if (!progress.achievements['archivist']) {
+                    progress.achievements['archivist'] = { grantedAt: Date.now() };
+                    achievementGranted = true;
                 }
                 break;
         }
 
-        // Если были выданы новые достижения, обновляем запись в БД
-        if (awardedAchievements.length > 0) {
-            await pool.query("UPDATE users SET progress = jsonb_set(progress, '{achievements}', $1::jsonb) WHERE id = $2", [
-                JSON.stringify(achievements),
-                userId
-            ]);
-            console.log(`User ${userId} was awarded achievements: ${awardedAchievements.map(a => a.name).join(', ')}`);
+        if (achievementGranted) {
+            await pool.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
+            console.log(`[SERVER] Пользователю ${userId} выдано достижение за действие "${actionType}".`);
         }
         
-        // Отправляем клиенту список только что полученных достижений
-        res.status(200).json({ awardedAchievements });
+        res.status(200).json({ success: true });
 
-    } catch (err) {
-        console.error('Report action error:', err);
-        res.status(500).json({ message: 'Server error during action report.' });
+    } catch (error) {
+        console.error(`Ошибка при обработке действия "${actionType}":`, error);
+        res.status(500).json({ message: 'Внутренняя ошибка сервера.' });
+    }
+});
+
+
+// --- НОВЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ ЕЖЕДНЕВНЫХ ДОСТИЖЕНИЙ ---
+app.post('/api/actions/check-daily', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) {
+        return res.status(400).json({ message: 'Необходим userId.' });
+    }
+    const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+    try {
+        const userRes = await pool.query('SELECT created_at, progress FROM users WHERE id = $1', [userId]);
+        if (userRes.rows.length === 0) throw new Error('Пользователь не найден.');
+
+        const { created_at, progress: currentProgress } = userRes.rows[0];
+        const progress = currentProgress || { achievements: {} };
+        if (!progress.achievements) progress.achievements = {};
+
+        const installDate = new Date(created_at).getTime();
+        const daysUsed = Math.floor((Date.now() - installDate) / DAY_IN_MS);
+        let changed = false;
+
+        const dayAchievements = { 'days_1': 1, 'days_7': 7, 'days_30': 30 };
+
+        for (const [achId, requiredDays] of Object.entries(dayAchievements)) {
+            if (daysUsed >= requiredDays && !progress.achievements[achId]) {
+                progress.achievements[achId] = { grantedAt: Date.now() };
+                changed = true;
+                console.log(`[SERVER] Пользователю ${userId} выдано достижение за дни: "${achId}".`);
+            }
+        }
+
+        if (changed) {
+            await pool.query('UPDATE users SET progress = $1 WHERE id = $2', [progress, userId]);
+        }
+
+        res.status(200).json({ success: true, achievements: progress.achievements });
+
+    } catch (error) {
+        console.error('Ошибка при ежедневной проверке достижений:', error);
+        res.status(500).json({ message: 'Внутренняя ошибка сервера.' });
     }
 });
 
@@ -171,8 +167,29 @@ app.post('/api/user/data/:userId', async (req, res) => {
     const { progress, settings } = req.body;
 
     try {
+        // --- НАЧАЛО НОВОЙ ЛОГИКИ: Проверка достижений за жалобы ---
+        if (progress && progress.complaintHistory) {
+            // Сначала получаем текущий прогресс из БД, чтобы ничего не затереть
+            const userRes = await pool.query('SELECT progress FROM users WHERE id = $1', [userId]);
+            const existingProgress = userRes.rows[0]?.progress || { achievements: {} };
+            if (!existingProgress.achievements) existingProgress.achievements = {};
+
+            // Объединяем ачивки
+            progress.achievements = { ...existingProgress.achievements, ...progress.achievements };
+
+            const complaintCount = progress.complaintHistory.length;
+            const complaintAchievements = { 'complaints_10': 10, 'complaints_50': 50, 'complaints_100': 100 };
+            
+            for (const [achId, requiredCount] of Object.entries(complaintAchievements)) {
+                if (complaintCount >= requiredCount && !progress.achievements[achId]) {
+                    progress.achievements[achId] = { grantedAt: Date.now() };
+                    console.log(`[SERVER] Пользователю ${userId} выдано достижение за жалобы: "${achId}".`);
+                }
+            }
+        }
+        // --- КОНЕЦ НОВОЙ ЛОГИКИ ---
+
         // Используем оператор || для "умного" объединения JSONB данных.
-        // Это сохранит существующие поля и обновит/добавит только новые.
         if (progress) {
             await pool.query('UPDATE users SET progress = progress || $1 WHERE id = $2', [progress, userId]);
         }
@@ -181,7 +198,6 @@ app.post('/api/user/data/:userId', async (req, res) => {
         }
         
         const result = await pool.query('SELECT last_sync FROM users WHERE id = $1', [userId]);
-        // Добавлена проверка на случай, если result.rows[0] не существует
         res.status(200).json({ message: 'Data saved successfully.', lastSyncTimestamp: result.rows[0]?.last_sync });
 
     } catch (err) {
@@ -341,11 +357,3 @@ app.listen(port, async () => {
         console.error('Database initialization error:', err);
     }
 });
-
-
-
-
-
-
-
-
